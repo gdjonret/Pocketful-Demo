@@ -45,6 +45,7 @@ type Payment struct {
 	AuthorizationID *string `json:"authorization_id"`
 	CreatedAt       string  `json:"created_at"`
 	Seq             int64   `json:"-"`
+	RefundOf        *string `json:"refund_of"`
 }
 type Authorization struct {
 	ID              string   `json:"authorization_id"`
@@ -63,7 +64,39 @@ type Authorization struct {
 	PaymentID       *string  `json:"payment_id"`
 	PaymentIDs      []string `json:"payment_ids"`
 	CreatedAt       string   `json:"created_at"`
+	ClosedAt        *string  `json:"closed_at"`
 	Seq             int64    `json:"-"`
+}
+type Revision struct {
+	PaymentID         string  `json:"payment_id"`
+	Revision          int     `json:"revision"`
+	Amount            int64   `json:"amount"`
+	EffectiveAt       string  `json:"effective_at"`
+	RecordedAt        string  `json:"recorded_at"`
+	Reason            string  `json:"reason"`
+	CorrectionBatchID *string `json:"correction_batch_id"`
+}
+type HoldEvent struct {
+	At         string `json:"at"`
+	RecordedAt string `json:"recorded_at"`
+	Remaining  int64  `json:"remaining"`
+}
+type StatementEntry struct {
+	Payment      Payment `json:"payment"`
+	Delta        int64   `json:"delta"`
+	BalanceAfter int64   `json:"balance_after"`
+	Revision     int     `json:"revision"`
+	EffectiveAt  string  `json:"effective_at"`
+	RecordedAt   string  `json:"recorded_at"`
+}
+type StatementSnapshot struct {
+	UserID         string
+	OpeningBalance int64
+	ClosingBalance int64
+	Entries        []StatementEntry
+	From           *string
+	To             string
+	KnownAt        *string
 }
 type Request struct {
 	ID              string  `json:"request_id"`
@@ -84,22 +117,27 @@ type IdemRecord struct {
 	Response           json.RawMessage
 }
 type State struct {
-	Currency         string                    `json:"currency"`
-	MinorUnits       int                       `json:"minor_units"`
-	Users            map[string]*User          `json:"users"`
-	Payments         map[string]*Payment       `json:"payments"`
-	Requests         map[string]*Request       `json:"requests"`
-	PaymentSeq       map[string]int64          `json:"payment_sequence"`
-	RequestSeq       map[string]int64          `json:"request_sequence"`
-	Authorizations   map[string]*Authorization `json:"authorizations"`
-	AuthorizationSeq map[string]int64          `json:"authorization_sequence"`
-	AuthorizationTTL int64                     `json:"authorization_ttl_seconds"`
-	Tokens           map[string]string         `json:"tokens"`
-	Operators        map[string]bool           `json:"operators"`
-	Idempotency      map[string]IdemRecord     `json:"idempotency"`
-	Next             int64                     `json:"next"`
-	Seq              int64                     `json:"seq"`
-	SeedTotal        int64                     `json:"seed_total"`
+	Currency         string                       `json:"currency"`
+	MinorUnits       int                          `json:"minor_units"`
+	Users            map[string]*User             `json:"users"`
+	Payments         map[string]*Payment          `json:"payments"`
+	Requests         map[string]*Request          `json:"requests"`
+	PaymentSeq       map[string]int64             `json:"payment_sequence"`
+	RequestSeq       map[string]int64             `json:"request_sequence"`
+	Authorizations   map[string]*Authorization    `json:"authorizations"`
+	AuthorizationSeq map[string]int64             `json:"authorization_sequence"`
+	AuthorizationTTL int64                        `json:"authorization_ttl_seconds"`
+	Tokens           map[string]string            `json:"tokens"`
+	Operators        map[string]bool              `json:"operators"`
+	Idempotency      map[string]IdemRecord        `json:"idempotency"`
+	Next             int64                        `json:"next"`
+	Seq              int64                        `json:"seq"`
+	SeedTotal        int64                        `json:"seed_total"`
+	OpeningBalances  map[string]int64             `json:"opening_balances,omitempty"`
+	Revisions        map[string][]Revision        `json:"revisions,omitempty"`
+	HoldEvents       map[string][]HoldEvent       `json:"hold_events,omitempty"`
+	Snapshots        map[string]StatementSnapshot `json:"snapshots,omitempty"`
+	ResetAt          string                       `json:"reset_at,omitempty"`
 }
 type Server struct {
 	mu sync.Mutex
@@ -117,7 +155,7 @@ func (e *apiError) Error() string               { return e.code }
 func ae(status int, code, msg string) *apiError { return &apiError{status, code, msg} }
 
 func emptyState() State {
-	return State{Currency: "EUR", MinorUnits: 2, Users: map[string]*User{}, Payments: map[string]*Payment{}, Requests: map[string]*Request{}, PaymentSeq: map[string]int64{}, RequestSeq: map[string]int64{}, Authorizations: map[string]*Authorization{}, AuthorizationSeq: map[string]int64{}, AuthorizationTTL: 600, Tokens: map[string]string{}, Operators: map[string]bool{}, Idempotency: map[string]IdemRecord{}, Next: 1}
+	return State{Currency: "EUR", MinorUnits: 2, Users: map[string]*User{}, Payments: map[string]*Payment{}, Requests: map[string]*Request{}, PaymentSeq: map[string]int64{}, RequestSeq: map[string]int64{}, Authorizations: map[string]*Authorization{}, AuthorizationSeq: map[string]int64{}, AuthorizationTTL: 600, Tokens: map[string]string{}, Operators: map[string]bool{}, Idempotency: map[string]IdemRecord{}, OpeningBalances: map[string]int64{}, Revisions: map[string][]Revision{}, HoldEvents: map[string][]HoldEvent{}, Snapshots: map[string]StatementSnapshot{}, ResetAt: now(), Next: 1}
 }
 func main() {
 	s := &Server{st: emptyState()}
@@ -327,8 +365,15 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case r.URL.Path == "/me" && r.Method == "GET":
-		held := s.held(u.ID)
-		writeJSON(w, 200, map[string]any{"user_id": u.ID, "display_name": u.DisplayName, "handle": u.Handle, "balance": u.Balance, "total": u.Balance, "available": u.Balance - held, "held": held, "currency": s.st.Currency, "minor_units": s.st.MinorUnits})
+		s.me(w, r, u)
+	case r.URL.Path == "/statement" && r.Method == "GET":
+		s.statement(w, r, u)
+	case strings.HasPrefix(r.URL.Path, "/payments/") && strings.HasSuffix(r.URL.Path, "/corrections") && r.Method == "POST":
+		s.correction(w, r, u)
+	case strings.HasPrefix(r.URL.Path, "/payments/") && strings.HasSuffix(r.URL.Path, "/refunds") && r.Method == "POST":
+		s.refund(w, r, u)
+	case strings.HasPrefix(r.URL.Path, "/payments/") && strings.HasSuffix(r.URL.Path, "/revisions") && r.Method == "GET":
+		s.listRevisions(w, r, u)
 	case r.URL.Path == "/payments" && r.Method == "POST":
 		s.payment(w, r, u)
 	case r.URL.Path == "/requests" && r.Method == "POST":
@@ -343,6 +388,8 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		s.activity(w, r, u)
 	case r.URL.Path == "/settlements" && r.Method == "POST":
 		s.settlement(w, r, u)
+	case r.URL.Path == "/correction-batches" && r.Method == "POST":
+		s.correctionBatch(w, r, u)
 	case r.URL.Path == "/authorizations" && r.Method == "POST":
 		s.createAuthorization(w, r, u)
 	case r.URL.Path == "/authorizations" && r.Method == "GET":
@@ -462,8 +509,21 @@ func (s *Server) reset(w http.ResponseWriter, r *http.Request) {
 			if id == "" || ns.Users[f] == nil || ns.Users[t] == nil || !aok || am != float64(int64(am)) || am < 1 || !(v == "public" || v == "private") {
 				return false
 			}
+			created := ns.ResetAt
+			if raw, exists := pm["created_at"]; exists {
+				cs, ok := raw.(string)
+				if !ok {
+					return false
+				}
+				ct, err := parseInstant(cs)
+				if err != nil || ct.After(time.Now()) {
+					return false
+				}
+				created = cs
+			}
 			ns.Seq++
-			ns.Payments[id] = &Payment{id, f, ns.Users[f].Handle, t, ns.Users[t].Handle, int64(am), cur, n, v, nil, nil, nil, now(), ns.Seq}
+			ns.Payments[id] = &Payment{ID: id, FromUserID: f, FromHandle: ns.Users[f].Handle, ToUserID: t, ToHandle: ns.Users[t].Handle, Amount: int64(am), Currency: cur, Note: n, Visibility: v, CreatedAt: created, Seq: ns.Seq}
+			ns.Revisions[id] = []Revision{{PaymentID: id, Revision: 1, Amount: int64(am), EffectiveAt: created, RecordedAt: created, Reason: ""}}
 			ns.PaymentSeq[id] = ns.Seq
 		}
 		return true
@@ -570,7 +630,7 @@ func (s *Server) reset(w http.ResponseWriter, r *http.Request) {
 				remaining = int64(value) - captured
 			}
 			ns.Seq++
-			a := &Authorization{id, fromID, ns.Users[fromID].Handle, toID, ns.Users[toID].Handle, int64(value), captured, remaining, cur, noteValue, vis, status, expires, paymentID, paymentIDs, created, ns.Seq}
+			a := &Authorization{ID: id, FromUserID: fromID, FromHandle: ns.Users[fromID].Handle, ToUserID: toID, ToHandle: ns.Users[toID].Handle, Amount: int64(value), CapturedAmount: captured, RemainingAmount: remaining, Currency: cur, Note: noteValue, Visibility: vis, Status: status, ExpiresAt: expires, PaymentID: paymentID, PaymentIDs: paymentIDs, CreatedAt: created, Seq: ns.Seq}
 			ns.Authorizations[id] = a
 			ns.AuthorizationSeq[id] = ns.Seq
 		}
@@ -596,6 +656,18 @@ func (s *Server) reset(w http.ResponseWriter, r *http.Request) {
 			ns.Operators[id] = true
 		}
 	}
+	for id, user := range ns.Users {
+		ns.OpeningBalances[id] = user.Balance
+	}
+	for _, p := range ns.Payments {
+		ns.OpeningBalances[p.FromUserID] += p.Amount
+		ns.OpeningBalances[p.ToUserID] -= p.Amount
+	}
+	for id, a := range ns.Authorizations {
+		if a.Status == "open" {
+			ns.HoldEvents[id] = []HoldEvent{{At: a.CreatedAt, RecordedAt: a.CreatedAt, Remaining: a.RemainingAmount}}
+		}
+	}
 	s.st = ns
 	w.WriteHeader(204)
 }
@@ -613,6 +685,8 @@ func (s *Server) expireAuthorizations() {
 			if err == nil && !expires.After(n) {
 				a.Status = "expired"
 				a.RemainingAmount = 0
+				x := a.ExpiresAt
+				a.ClosedAt = &x
 			}
 		}
 	}
@@ -688,6 +762,7 @@ func (s *Server) importState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.st = ns
+	s.ensureLedger()
 	w.WriteHeader(204)
 }
 func (s *Server) validState(st *State) bool {
@@ -740,6 +815,32 @@ func (s *Server) validState(st *State) bool {
 			return false
 		}
 		if p.AuthorizationID != nil && (st.Authorizations[*p.AuthorizationID] == nil || p.RequestID != nil || p.SettlementID != nil) {
+			return false
+		}
+	}
+	refundTotals := map[string]int64{}
+	for _, p := range st.Payments {
+		if p.RefundOf == nil {
+			continue
+		}
+		target := st.Payments[*p.RefundOf]
+		if target == nil || target.RefundOf != nil || p.ID == target.ID ||
+			p.FromUserID != target.ToUserID || p.ToUserID != target.FromUserID ||
+			p.Note != target.Note || p.Visibility != target.Visibility ||
+			p.RequestID != nil || p.AuthorizationID != nil || p.SettlementID != nil {
+			return false
+		}
+		if refundTotals[target.ID] > math.MaxInt64-p.Amount {
+			return false
+		}
+		refundTotals[target.ID] += p.Amount
+	}
+	for targetID, refunded := range refundTotals {
+		ceiling := st.Payments[targetID].Amount
+		if revisions := st.Revisions[targetID]; len(revisions) > 0 {
+			ceiling = revisions[len(revisions)-1].Amount
+		}
+		if refunded > ceiling {
 			return false
 		}
 	}
@@ -897,6 +998,8 @@ func (s *Server) signup(w http.ResponseWriter, r *http.Request) {
 	id := s.next("u")
 	tok := randomToken()
 	s.st.Users[id] = &User{id, email, hashPassword(pw), dn, h, 0}
+	s.ensureLedger()
+	s.st.OpeningBalances[id] = 0
 	s.st.Tokens[tok] = id
 	writeJSON(w, 201, map[string]any{"user_id": id, "display_name": dn, "token": tok})
 }
@@ -985,9 +1088,10 @@ func (s *Server) move(from, to *User, a int64, n, v string, rid, sid *string) *P
 	from.Balance -= a
 	to.Balance += a
 	s.st.Seq++
-	p := &Payment{s.next("p"), from.ID, from.Handle, to.ID, to.Handle, a, s.st.Currency, n, v, rid, sid, nil, now(), s.st.Seq}
+	p := &Payment{ID: s.next("p"), FromUserID: from.ID, FromHandle: from.Handle, ToUserID: to.ID, ToHandle: to.Handle, Amount: a, Currency: s.st.Currency, Note: n, Visibility: v, RequestID: rid, SettlementID: sid, CreatedAt: now(), Seq: s.st.Seq}
 	s.st.Payments[p.ID] = p
 	s.st.PaymentSeq[p.ID] = p.Seq
+	initRevision(&s.st, p)
 	return p
 }
 func (s *Server) createRequest(w http.ResponseWriter, r *http.Request, u *User) {
@@ -1335,6 +1439,8 @@ func (s *Server) createAuthorization(w http.ResponseWriter, r *http.Request, u *
 	auth := &Authorization{ID: s.next("a"), FromUserID: u.ID, FromHandle: u.Handle, ToUserID: to.ID, ToHandle: to.Handle, Amount: a, CapturedAmount: 0, RemainingAmount: a, Currency: s.st.Currency, Note: n, Visibility: v, Status: "open", ExpiresAt: expires.Format(time.RFC3339Nano), PaymentID: nil, PaymentIDs: []string{}, CreatedAt: created.Format(time.RFC3339Nano), Seq: s.st.Seq}
 	s.st.Authorizations[auth.ID] = auth
 	s.st.AuthorizationSeq[auth.ID] = auth.Seq
+	s.ensureLedger()
+	s.st.HoldEvents[auth.ID] = []HoldEvent{{At: auth.CreatedAt, RecordedAt: auth.CreatedAt, Remaining: auth.Amount}}
 	s.saveIdem(scope, body, r, auth)
 	writeJSON(w, 201, auth)
 }
@@ -1407,12 +1513,17 @@ func (s *Server) authorizationAction(w http.ResponseWriter, r *http.Request, u *
 		if final || a.RemainingAmount == 0 {
 			a.Status = "captured"
 			a.RemainingAmount = 0
+			x := now()
+			a.ClosedAt = &x
 		}
 		aid := a.ID
 		s.st.Seq++
-		p := &Payment{s.next("p"), from.ID, from.Handle, to.ID, to.Handle, capture, s.st.Currency, a.Note, a.Visibility, nil, nil, &aid, now(), s.st.Seq}
+		p := &Payment{ID: s.next("p"), FromUserID: from.ID, FromHandle: from.Handle, ToUserID: to.ID, ToHandle: to.Handle, Amount: capture, Currency: s.st.Currency, Note: a.Note, Visibility: a.Visibility, AuthorizationID: &aid, CreatedAt: now(), Seq: s.st.Seq}
 		s.st.Payments[p.ID] = p
 		s.st.PaymentSeq[p.ID] = p.Seq
+		initRevision(&s.st, p)
+		s.ensureLedger()
+		s.st.HoldEvents[a.ID] = append(s.st.HoldEvents[a.ID], HoldEvent{At: p.CreatedAt, RecordedAt: p.CreatedAt, Remaining: a.RemainingAmount})
 		a.PaymentID = &p.ID
 		a.PaymentIDs = append(a.PaymentIDs, p.ID)
 		s.saveIdem(scope, body, r, p)
@@ -1432,6 +1543,10 @@ func (s *Server) authorizationAction(w http.ResponseWriter, r *http.Request, u *
 		}
 		a.Status = "voided"
 		a.RemainingAmount = 0
+		x := now()
+		a.ClosedAt = &x
+		s.ensureLedger()
+		s.st.HoldEvents[a.ID] = append(s.st.HoldEvents[a.ID], HoldEvent{At: x, RecordedAt: x, Remaining: 0})
 		writeJSON(w, 200, a)
 	default:
 		fail(w, ae(404, "not_found", "not found"))
@@ -1572,9 +1687,10 @@ func (s *Server) settlement(w http.ResponseWriter, r *http.Request, u *User) {
 	}
 	for _, t := range txs {
 		s.st.Seq++
-		p := &Payment{s.next("p"), t.f.ID, t.f.Handle, t.t.ID, t.t.Handle, t.a, s.st.Currency, t.n, t.v, nil, &sid, nil, committed, s.st.Seq}
+		p := &Payment{ID: s.next("p"), FromUserID: t.f.ID, FromHandle: t.f.Handle, ToUserID: t.t.ID, ToHandle: t.t.Handle, Amount: t.a, Currency: s.st.Currency, Note: t.n, Visibility: t.v, SettlementID: &sid, CreatedAt: committed, Seq: s.st.Seq}
 		s.st.Payments[p.ID] = p
 		s.st.PaymentSeq[p.ID] = p.Seq
+		initRevision(&s.st, p)
 		ps = append(ps, p)
 	}
 	res := map[string]any{"settlement_id": sid, "committed_at": committed, "payments": ps}

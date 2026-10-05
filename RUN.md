@@ -1,4 +1,8 @@
 # Pocketful Stage 2
+# Pocketful Stage 4
+
+Stage 4 retains the complete prior API and browser UI and adds linked refunds and
+operator-only atomic correction batches.
 
 Build and run the standalone service:
 
