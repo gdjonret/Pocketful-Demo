@@ -14,6 +14,18 @@ type fakeRedis struct {
 	values map[string]string
 }
 
+func TestPersistenceCredentialsPreferVercelKV(t *testing.T) {
+	t.Setenv("KV_REST_API_URL", "https://vercel-kv.example/")
+	t.Setenv("KV_REST_API_TOKEN", "vercel-token")
+	t.Setenv("UPSTASH_REDIS_REST_URL", "https://stale-upstash.example/")
+	t.Setenv("UPSTASH_REDIS_REST_TOKEN", "stale-token")
+
+	url, token, ok := persistenceCredentials()
+	if !ok || url != "https://vercel-kv.example" || token != "vercel-token" {
+		t.Fatalf("credentials=(%q, %q, %v), want Vercel KV credentials", url, token, ok)
+	}
+}
+
 func (f *fakeRedis) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

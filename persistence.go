@@ -49,15 +49,19 @@ func (b *bufferedResponse) flushTo(w http.ResponseWriter) {
 }
 
 func persistenceCredentials() (string, string, bool) {
-	url := strings.TrimRight(os.Getenv("UPSTASH_REDIS_REST_URL"), "/")
-	token := os.Getenv("UPSTASH_REDIS_REST_TOKEN")
-	if url == "" {
-		url = strings.TrimRight(os.Getenv("KV_REST_API_URL"), "/")
+	// Prefer the variables provisioned by Vercel's Upstash integration. The
+	// UPSTASH_* names remain supported for direct Upstash configurations.
+	url := strings.TrimRight(os.Getenv("KV_REST_API_URL"), "/")
+	token := os.Getenv("KV_REST_API_TOKEN")
+	if url != "" && token != "" {
+		return url, token, true
 	}
-	if token == "" {
-		token = os.Getenv("KV_REST_API_TOKEN")
+	url = strings.TrimRight(os.Getenv("UPSTASH_REDIS_REST_URL"), "/")
+	token = os.Getenv("UPSTASH_REDIS_REST_TOKEN")
+	if url != "" && token != "" {
+		return url, token, true
 	}
-	return url, token, url != "" && token != ""
+	return "", "", false
 }
 
 func redisCommand(ctx context.Context, command ...any) (json.RawMessage, error) {

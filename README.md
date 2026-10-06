@@ -95,13 +95,13 @@ Vercel replaces or restarts an application instance.
 
 Configure these environment variables in the Vercel project:
 
-- `UPSTASH_REDIS_REST_URL`
-- `UPSTASH_REDIS_REST_TOKEN`
+- `KV_REST_API_URL`
+- `KV_REST_API_TOKEN`
 - `POCKETFUL_DEMO_ADMIN_SECRET` — a long random secret used only to protect the
   challenge state-management helpers on the public demo.
 
-`KV_REST_API_URL` and `KV_REST_API_TOKEN` are also accepted as compatibility
-fallbacks for Redis integrations that expose those names.
+`UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` are also accepted as
+compatibility fallbacks for direct Upstash configurations.
 
 When Redis credentials are absent, Pocketful retains its original in-memory
 behavior for local development and challenge-compatible testing.
