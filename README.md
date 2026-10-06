@@ -14,7 +14,7 @@ provide the live application demo.
 
 ## Live Demo
 
-https://vercel-demo-psi-gules.vercel.app/
+https://pocketful-demo.vercel.app/
 
 ## Official Hackathon Submission
 
