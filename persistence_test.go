@@ -78,6 +78,9 @@ func TestPersistentSignupSurvivesServerReplacement(t *testing.T) {
 	if signupRec.Code != http.StatusCreated {
 		t.Fatalf("signup status=%d body=%s", signupRec.Code, signupRec.Body.String())
 	}
+	if got := first.st.Users["u_1"].Balance; got != demoStartingBalance {
+		t.Fatalf("new demo account balance=%d, want %d", got, demoStartingBalance)
+	}
 
 	// Simulate Vercel replacing the process with a completely fresh Server.
 	second := &Server{st: emptyState()}

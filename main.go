@@ -146,6 +146,9 @@ type Server struct {
 
 const maxSafeInteger int64 = 1<<53 - 1
 
+// demoStartingBalance is €1,000.00 in minor units. Pocketful-Demo only.
+const demoStartingBalance int64 = 100000
+
 type apiError struct {
 	status    int
 	code, msg string
@@ -1003,9 +1006,10 @@ func (s *Server) signup(w http.ResponseWriter, r *http.Request) {
 	}
 	id := s.next("u")
 	tok := randomToken()
-	s.st.Users[id] = &User{id, email, hashPassword(pw), dn, h, 0}
+	s.st.Users[id] = &User{id, email, hashPassword(pw), dn, h, demoStartingBalance}
 	s.ensureLedger()
-	s.st.OpeningBalances[id] = 0
+	s.st.OpeningBalances[id] = demoStartingBalance
+	s.st.SeedTotal += demoStartingBalance
 	s.st.Tokens[tok] = id
 	writeJSON(w, 201, map[string]any{"user_id": id, "display_name": dn, "token": tok})
 }
