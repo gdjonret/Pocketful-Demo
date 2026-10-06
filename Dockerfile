@@ -1,6 +1,6 @@
 FROM golang:1.22-alpine AS build
 WORKDIR /src
-COPY go.mod main.go ui.go temporal.go stage4.go ./
+COPY go.mod main.go ui.go temporal.go stage4.go persistence.go ./
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /pocketful .
 
 FROM scratch

@@ -6,6 +6,12 @@ WeAreDevelopers Dark Factory Hackathon.
 This repository contains the deployment version of Pocketful used to
 provide the live application demo.
 
+> **Deployment adaptation:** `Pocketful-Demo` is a deployment adaptation of
+> the official Pocketful submission. Persistent external storage is used only
+> for the hosted demonstration environment. The authoritative hackathon
+> implementation and factory-generated history are preserved in
+> `Pocketful-Final`.
+
 ## Live Demo
 
 https://vercel-demo-psi-gules.vercel.app/
@@ -79,3 +85,33 @@ https://github.com/gdjonret/Pocketful-Final
 ## Hackathon
 
 WeAreDevelopers Dark Factory Hackathon --- BAND
+
+## Demo Persistence on Vercel
+
+The hosted demo can persist its complete Pocketful state in Upstash Redis. This
+keeps accounts, password hashes, login tokens, balances, payments, requests,
+authorizations, refunds, corrections, and temporal ledger data available when
+Vercel replaces or restarts an application instance.
+
+Configure these environment variables in the Vercel project:
+
+- `UPSTASH_REDIS_REST_URL`
+- `UPSTASH_REDIS_REST_TOKEN`
+- `POCKETFUL_DEMO_ADMIN_SECRET` — a long random secret used only to protect the
+  challenge state-management helpers on the public demo.
+
+`KV_REST_API_URL` and `KV_REST_API_TOKEN` are also accepted as compatibility
+fallbacks for Redis integrations that expose those names.
+
+When Redis credentials are absent, Pocketful retains its original in-memory
+behavior for local development and challenge-compatible testing.
+
+### Public demo security
+
+When persistence is configured, `/_test/reset`, `/_test/export`, and
+`/_test/import` are hidden from unauthenticated public callers. An authorized
+administrative call must include the `X-Pocketful-Demo-Admin` header matching
+`POCKETFUL_DEMO_ADMIN_SECRET`.
+
+The deployment is a hackathon demonstration and must not be used for real
+financial or sensitive personal data.

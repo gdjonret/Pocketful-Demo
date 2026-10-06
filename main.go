@@ -326,23 +326,29 @@ func (s *Server) next(prefix string) string {
 		}
 	}
 }
-func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (s *Server) serveRequest(w http.ResponseWriter, r *http.Request) {
 	s.expireAuthorizations()
-	if r.URL.Path == "/health" && r.Method == "GET" {
-		writeJSON(w, 200, map[string]string{"status": "ok"})
-		return
-	}
 	if r.URL.Path == "/_test/reset" && r.Method == "POST" {
+		if !demoAdminAuthorized(r) {
+			fail(w, ae(404, "not_found", "not found"))
+			return
+		}
 		s.reset(w, r)
 		return
 	}
 	if r.URL.Path == "/_test/export" && r.Method == "GET" {
+		if !demoAdminAuthorized(r) {
+			fail(w, ae(404, "not_found", "not found"))
+			return
+		}
 		writeJSON(w, 200, map[string]any{"track": "pocketful", "format_version": 1, "state": s.st})
 		return
 	}
 	if r.URL.Path == "/_test/import" && r.Method == "POST" {
+		if !demoAdminAuthorized(r) {
+			fail(w, ae(404, "not_found", "not found"))
+			return
+		}
 		s.importState(w, r)
 		return
 	}
