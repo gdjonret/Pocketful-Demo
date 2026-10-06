@@ -197,6 +197,27 @@ func normalizeState(st *State) {
 	if st.Next == 0 {
 		st.Next = 1
 	}
+	// Sequence fields are deliberately omitted from entity JSON and persisted
+	// separately in the canonical sequence maps. Rehydrate them before running
+	// the Stage 4 state validator, just as the challenge import path does.
+	for id, payment := range st.Payments {
+		if payment != nil {
+			payment.Seq = st.PaymentSeq[id]
+		}
+	}
+	for id, request := range st.Requests {
+		if request != nil {
+			request.Seq = st.RequestSeq[id]
+		}
+	}
+	for id, authorization := range st.Authorizations {
+		if authorization != nil {
+			authorization.Seq = st.AuthorizationSeq[id]
+			if authorization.PaymentIDs == nil {
+				authorization.PaymentIDs = []string{}
+			}
+		}
+	}
 }
 
 func (s *Server) loadPersistentState(ctx context.Context) error {

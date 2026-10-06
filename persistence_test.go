@@ -78,6 +78,8 @@ func TestPersistentSignupSurvivesServerReplacement(t *testing.T) {
 	redis := &fakeRedis{values: map[string]string{}}
 	ts := httptest.NewServer(redis)
 	defer ts.Close()
+	t.Setenv("KV_REST_API_URL", "")
+	t.Setenv("KV_REST_API_TOKEN", "")
 	t.Setenv("UPSTASH_REDIS_REST_URL", ts.URL)
 	t.Setenv("UPSTASH_REDIS_REST_TOKEN", "test-token")
 	t.Setenv("POCKETFUL_DEMO_ADMIN_SECRET", "admin-test")
@@ -93,8 +95,33 @@ func TestPersistentSignupSurvivesServerReplacement(t *testing.T) {
 	if got := first.st.Users["u_1"].Balance; got != demoStartingBalance {
 		t.Fatalf("new demo account balance=%d, want %d", got, demoStartingBalance)
 	}
+	var signupBody struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(signupRec.Body.Bytes(), &signupBody); err != nil || signupBody.Token == "" {
+		t.Fatalf("decode signup token: %v", err)
+	}
+
+	secondSignup := httptest.NewRequest(http.MethodPost, "/auth/signup", strings.NewReader(`{"email":"recipient@example.com","password":"Password123!","display_name":"Recipient"}`))
+	secondSignup.Header.Set("Content-Type", "application/json")
+	secondSignupRec := httptest.NewRecorder()
+	first.serve(secondSignupRec, secondSignup)
+	if secondSignupRec.Code != http.StatusCreated {
+		t.Fatalf("recipient signup status=%d body=%s", secondSignupRec.Code, secondSignupRec.Body.String())
+	}
+
+	payment := httptest.NewRequest(http.MethodPost, "/payments", strings.NewReader(`{"to_handle":"recipient","amount":500,"note":"Persistence test","visibility":"private"}`))
+	payment.Header.Set("Content-Type", "application/json")
+	payment.Header.Set("Authorization", "Bearer "+signupBody.Token)
+	payment.Header.Set("Idempotency-Key", "persistence-payment")
+	paymentRec := httptest.NewRecorder()
+	first.serve(paymentRec, payment)
+	if paymentRec.Code != http.StatusCreated {
+		t.Fatalf("payment status=%d body=%s", paymentRec.Code, paymentRec.Body.String())
+	}
 
 	// Simulate Vercel replacing the process with a completely fresh Server.
+	// Persisted entity sequence fields must be reconstructed before validation.
 	second := &Server{st: emptyState()}
 	login := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(`{"email":"demo@example.com","password":"Password123!"}`))
 	login.Header.Set("Content-Type", "application/json")
