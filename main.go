@@ -146,8 +146,8 @@ type Server struct {
 
 const maxSafeInteger int64 = 1<<53 - 1
 
-// demoStartingBalance is €1,000.00 in minor units. Pocketful-Demo only.
-const demoStartingBalance int64 = 100000
+// demoStartingBalance is €200.00 in minor units. Pocketful-Demo only.
+const demoStartingBalance int64 = 20000
 
 type apiError struct {
 	status    int
